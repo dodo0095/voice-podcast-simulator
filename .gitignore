@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.env
+uv.lock
+
+# 模型權重（通常很大）
+models/*.pth
+models/*.pt
+models/*.bin
+models/*.safetensors
+models/*.ckpt
+
+# 音訊 / 資料
+data/raw/*.mp3
+data/raw/*.wav
+data/raw/*.flac
+data/raw/*.m4a
+data/reference/*.mp3
+data/reference/*.wav
+data/reference/*.flac
+data/sliced/
+data/transcripts/
+
+# 輸出
+output/
+
+# 系統
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude local settings
+.claude/settings.local.json
+.claude/hook-execution.jsonl

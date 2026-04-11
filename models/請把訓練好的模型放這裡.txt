@@ -1,0 +1,10 @@
+訓練完成後，將模型檔案放到這個資料夾：
+
+需要的檔案：
+  sovits_model.pth    ← SoVITS 模型
+  gpt_model.ckpt      ← GPT 模型
+
+模型位置（GPT-SoVITS 訓練後）：
+  GPT-SoVITS/logs/my_voice/
+
+然後更新 configs/voice_config.yaml 中的路徑

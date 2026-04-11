@@ -1,0 +1,54 @@
+# ==========================================
+# AI 聲音克隆設定檔
+# ==========================================
+
+# 說話人資訊
+speaker:
+  name: "my_voice"          # 你的聲音代號（英文，不含空格）
+  language: "zh"            # 主要語言: zh=中文, ja=日文, en=英文
+
+# 音訊前處理設定
+preprocess:
+  sample_rate: 16000        # 取樣率（GPT-SoVITS 要求 16000 或 32000）
+  channels: 1               # 單聲道
+  min_segment_sec: 3.0      # 最短切段秒數
+  max_segment_sec: 10.0     # 最長切段秒數
+  target_db: -23.0          # 目標音量 (LUFS)
+  silence_threshold_db: -40 # 靜音閾值（低於此視為靜音）
+  silence_min_ms: 300       # 最短靜音長度（毫秒）才切段
+
+# Whisper 轉錄設定
+transcribe:
+  model_size: "large-v3"    # 模型大小: tiny/base/small/medium/large-v3
+  device: "cuda"            # cuda 或 cpu（GPU 電腦用 cuda）
+  compute_type: "float16"   # float16（GPU）或 int8（CPU 節省記憶體）
+  language: "zh"            # 轉錄語言
+  beam_size: 5              # 解碼 beam size（越大越準但越慢）
+  vad_filter: true          # 啟用 VAD 過濾靜音段
+
+# 訓練設定（供參考，實際在 GPT-SoVITS WebUI 設定）
+training:
+  sovits_epochs: 8          # SoVITS 訓練輪數（建議 8-16）
+  gpt_epochs: 15            # GPT 訓練輪數（建議 15-25）
+  batch_size: 4             # batch size（VRAM 不足時降為 2）
+  save_every_epoch: 4       # 每幾輪存一次 checkpoint
+
+# 推論設定
+inference:
+  # 模型路徑（訓練完後填入）
+  sovits_model_path: "models/sovits_model.pth"
+  gpt_model_path: "models/gpt_model.ckpt"
+
+  # 參考音訊（用來讓模型知道你的聲音風格）
+  reference_audio: "data/reference/ref.wav"   # 3-10 秒的你的聲音
+  reference_text: ""                           # 參考音訊裡說的話
+
+  # 生成參數
+  top_k: 5
+  top_p: 1.0
+  temperature: 1.0
+  speed_factor: 1.0         # 語速（1.0=正常, 0.8=慢, 1.2=快）
+
+  # 輸出設定
+  output_dir: "output"
+  output_format: "wav"      # wav 或 mp3
