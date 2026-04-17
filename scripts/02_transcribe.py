@@ -85,7 +85,10 @@ def load_whisper_model():
 
 
 def transcribe_file(model, wav_path: Path) -> str | None:
-    """轉錄單一 WAV 檔，返回文字"""
+    """轉錄單一 WAV 檔，返回文字（含信心分數過濾）"""
+    # 信心分數門檻：avg_logprob 越接近 0 越好，-1.0 以下通常是胡言亂語
+    CONFIDENCE_THRESHOLD = cfg.get("confidence_threshold", -0.8)
+
     try:
         segments, info = model.transcribe(
             str(wav_path),
@@ -95,12 +98,29 @@ def transcribe_file(model, wav_path: Path) -> str | None:
             vad_parameters={"min_silence_duration_ms": 500},
         )
 
-        # 合併所有段落的文字
+        # 合併段落文字，同時過濾低信心段落
         texts = []
+        low_confidence_count = 0
+        total_count = 0
+
         for seg in segments:
+            total_count += 1
             text = seg.text.strip()
-            if text:
-                texts.append(text)
+            if not text:
+                continue
+
+            # 信心分數過濾（seg.avg_logprob 為負數，越接近 0 越好）
+            if seg.avg_logprob < CONFIDENCE_THRESHOLD:
+                low_confidence_count += 1
+                log.debug(f"低信心段落過濾 ({seg.avg_logprob:.2f}): {text[:20]}")
+                continue
+
+            texts.append(text)
+
+        # 若超過一半的段落低信心，整筆放棄
+        if total_count > 0 and low_confidence_count / total_count > 0.5:
+            log.debug(f"整筆低信心放棄: {wav_path.name}")
+            return None
 
         full_text = "".join(texts).strip()
 
