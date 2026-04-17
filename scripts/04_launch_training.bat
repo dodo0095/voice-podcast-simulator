@@ -78,15 +78,15 @@ echo ========================================
 echo.
 pause
 
-:: 修復 Jinja2 版本相容問題（3.1.3+ 與 Gradio 不相容）
-echo 檢查 Jinja2 版本...
-%PYTHON_EXE% -c "import jinja2; v=tuple(int(x) for x in jinja2.__version__.split('.')[:3]); exit(0 if v <= (3,1,2) else 1)" 2>nul
+:: 修復 Starlette 版本相容問題（0.28+ 改變 TemplateResponse API，導致舊 Gradio 崩潰）
+echo 檢查 Starlette 版本...
+%PYTHON_EXE% -c "import starlette; v=tuple(int(x) for x in starlette.__version__.split('.')[:2]); exit(0 if v < (0,28) else 1)" 2>nul
 if errorlevel 1 (
-    echo [修復] 降級 Jinja2 至 3.1.2 以修復 Gradio 相容問題...
-    %PYTHON_EXE% -m pip install "jinja2==3.1.2" --quiet
-    echo [完成] Jinja2 已修復
+    echo [修復] 降級 Starlette 至相容版本以修復 Gradio TemplateResponse 崩潰...
+    %PYTHON_EXE% -m pip install "starlette<0.28" --quiet
+    echo [完成] Starlette 已修復
 ) else (
-    echo [OK] Jinja2 版本相容
+    echo [OK] Starlette 版本相容
 )
 
 :: 清除 Proxy 設定（避免 Gradio 無法綁定 localhost）
