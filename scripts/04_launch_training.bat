@@ -78,16 +78,21 @@ echo ========================================
 echo.
 pause
 
-:: 修復 Starlette 版本相容問題
-:: 需要 ==0.27.0：>= 0.27 讓 FastAPI 找到 _exception_handler，< 0.28 讓舊 Gradio TemplateResponse 正常運作
-echo 檢查 Starlette 版本...
-%PYTHON_EXE% -c "import starlette; exit(0 if starlette.__version__ == '0.27.0' else 1)" 2>nul
+:: 檢查 Starlette 是否有 FastAPI 需要的 _exception_handler 模組
+:: 不寫死版本，只在缺模組時升級到 FastAPI / Gradio 雙方都接受的最低版 (>=0.46,<2.0)
+echo 檢查 Starlette 相容性...
+%PYTHON_EXE% -c "from starlette import _exception_handler" 2>nul
 if errorlevel 1 (
-    echo [修復] 安裝 Starlette 0.27.0（FastAPI + Gradio 相容版本）...
-    %PYTHON_EXE% -m pip install "starlette==0.27.0" --quiet
-    echo [完成] Starlette 已修復
+    echo [修復] Starlette 缺少 _exception_handler 模組，升級中...
+    %PYTHON_EXE% -m pip install "starlette>=0.46.0,<2.0" --quiet
+    if errorlevel 1 (
+        echo [錯誤] Starlette 升級失敗
+        pause
+        exit /b 1
+    )
+    echo [完成] Starlette 已升級
 ) else (
-    echo [OK] Starlette 版本相容 ^(0.27.0^)
+    echo [OK] Starlette 相容
 )
 
 :: 清除 Proxy 設定（避免 Gradio 無法綁定 localhost）

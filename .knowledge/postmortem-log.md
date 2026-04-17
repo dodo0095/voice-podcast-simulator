@@ -4,14 +4,14 @@
 
 ---
 
-### 2026-04-17 — GPT-SoVITS WebUI 啟動時 starlette 模組缺失
+### 2026-04-17 — GPT-SoVITS WebUI 啟動時 starlette._exception_handler 缺失
 
 | 項目 | 內容 |
 |------|------|
 | 分類 | runtime |
 | 問題 | 執行 `scripts\04_launch_training.bat` 時，`python webui.py` 啟動失敗並拋出 `ModuleNotFoundError: No module named 'starlette._exception_handler'`，WebUI 無法進入。 |
-| 原因 | `FastAPI` 會去 `from starlette._exception_handler import ...`，但環境中的 `starlette` 版本太舊（< 0.27），沒有這個模組；反之升太新（>= 0.28）又會讓 GPT-SoVITS 搭配的舊版 Gradio `TemplateResponse` 失效。兩端夾擊下，**唯一相容點是 `starlette==0.27.0`**。觸發這個錯誤的根因有兩種：（1）使用者的 bat 是舊版，沒有自動修復邏輯；（2）環境中 `starlette` 被其他套件帶走降版。 |
-| 解法 | 1) 立即修復：`C:\py310\python.exe -m pip install starlette==0.27.0`。<br>2) 新增 `setup/fix_dependencies.bat` 自動鎖定 starlette 0.27.0。<br>3) `scripts/04_launch_training.bat`（main 版本）已內建啟動前檢查，若不是 0.27.0 會自動安裝。<br>4) 使用者若遇到此錯，先 `git pull` 拿最新 bat 再執行即可。 |
-| 預防 | 任何由 Git 來源直接 `pip install -r` 的第三方專案（GPT-SoVITS、RVC 等）都是版本未鎖定的上游，又通常混用 FastAPI + 舊 Gradio。這類組合的正確做法不是「升版」而是「鎖版」— 找出唯一兩邊都能用的點（本專案即 starlette 0.27.0），並在啟動腳本加自動檢查，避免環境漂移。 |
+| 原因 | `FastAPI` 會 `from starlette._exception_handler import ...`，但環境中 `starlette` 版本低於 FastAPI 的要求，沒這個模組。本次環境實測版本為：`fastapi==0.136.0`（要 `starlette>=0.46.0`）、`gradio==6.12.0`（要 `starlette>=0.40.0,<2.0`），所以交集是 **`starlette>=0.46.0,<2.0`**。早期 commit 裡把 starlette 鎖在 `==0.27.0` 是針對更舊版 GPT-SoVITS / 舊 Gradio 的組合，已不適用當前環境。 |
+| 解法 | 1) 立即修復：`C:\py310\python.exe -m pip install "starlette>=0.46.0,<2.0"`。<br>2) `setup/fix_dependencies.bat` 改為升級策略（不寫死版本，只限制區間）。<br>3) `scripts/04_launch_training.bat` 的自動修復邏輯改為「偵測 `_exception_handler` 是否可匯入，缺了才升級到 `>=0.46.0,<2.0`」，避免無條件降版打爆新版 gradio。 |
+| 預防 | **環境相依修復不能寫死版本**。GPT-SoVITS 是 git clone 上游，`gradio` 又會隨時間跳大版本（3.x → 4.x → 5.x → 6.x），不同時間點 clone 下來的環境對 starlette 的要求區間完全不同。正確做法是：以「能否匯入目標模組」作為判定條件，缺了才升級到當下兩邊都能接受的區間。把版本鎖死在歷史某個點 = 把自己困在過去。 |
 | 狀態 | resolved |
 | 到期日 | 2026-05-01 |

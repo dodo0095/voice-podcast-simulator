@@ -1,14 +1,14 @@
 @echo off
 chcp 65001 > nul
 echo ========================================
-echo  修復 GPT-SoVITS 相依套件（Starlette / Proxy）
+echo  修復 GPT-SoVITS 相依套件（Starlette 對齊）
 echo ========================================
 echo.
-echo 症狀一：啟動 webui.py 時出現
+echo 症狀：啟動 webui.py 時出現
 echo   ModuleNotFoundError: No module named 'starlette._exception_handler'
-echo 症狀二：Gradio TemplateResponse 相關錯誤
 echo.
-echo 正確解法：把 starlette 鎖定在 0.27.0（FastAPI 找得到、舊 Gradio 也能用）
+echo 策略：不寫死 starlette 版本，查目前 fastapi / gradio 要求，
+echo       升級到兩者都接受的最低版本 ^(>=0.46, ^<2.0^)。
 echo.
 
 :: 偵測 Python 路徑（優先用 C:\py310，其次用系統 python）
@@ -37,11 +37,22 @@ echo ----------------------------------------
 echo.
 
 echo ----------------------------------------
-echo 鎖定 starlette==0.27.0
+echo 升級 starlette 到 >=0.46.0,^<2.0（相容 FastAPI + 新版 Gradio）
 echo ----------------------------------------
-%PYTHON_EXE% -m pip install "starlette==0.27.0"
+%PYTHON_EXE% -m pip install --upgrade "starlette>=0.46.0,<2.0"
 if errorlevel 1 (
     echo [錯誤] 套件安裝失敗，請確認網路或 Python 路徑
+    pause
+    exit /b 1
+)
+echo.
+
+echo ----------------------------------------
+echo 驗證 _exception_handler 模組存在...
+echo ----------------------------------------
+%PYTHON_EXE% -c "from starlette import _exception_handler; print('[OK] starlette._exception_handler 可以匯入')"
+if errorlevel 1 (
+    echo [錯誤] 升級後仍無法匯入 _exception_handler，請手動檢查
     pause
     exit /b 1
 )
