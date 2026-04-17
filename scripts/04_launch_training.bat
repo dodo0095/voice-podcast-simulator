@@ -9,6 +9,24 @@ cd /d "%~dp0\.."
 set PROJECT_ROOT=%CD%
 set DATASET_LIST=%PROJECT_ROOT%\data\transcripts\dataset_validated.txt
 
+:: 偵測 Python 路徑（優先用 C:\py310，其次用系統 python）
+set PYTHON_EXE=
+if exist "C:\py310\python.exe" (
+    set PYTHON_EXE=C:\py310\python.exe
+) else (
+    where python >nul 2>&1
+    if not errorlevel 1 (
+        set PYTHON_EXE=python
+    )
+)
+
+if "%PYTHON_EXE%"=="" (
+    echo [錯誤] 找不到 Python，請確認安裝路徑
+    pause
+    exit /b 1
+)
+echo 使用 Python: %PYTHON_EXE%
+
 :: 確認資料集存在
 if not exist "%DATASET_LIST%" (
     echo [錯誤] 找不到驗證後的資料集: %DATASET_LIST%
@@ -62,11 +80,13 @@ pause
 
 :: 修復 Jinja2 版本相容問題（3.1.3+ 與 Gradio 不相容）
 echo 檢查 Jinja2 版本...
-python -c "import jinja2; v=tuple(int(x) for x in jinja2.__version__.split('.')[:3]); exit(0 if v <= (3,1,2) else 1)" 2>nul
+%PYTHON_EXE% -c "import jinja2; v=tuple(int(x) for x in jinja2.__version__.split('.')[:3]); exit(0 if v <= (3,1,2) else 1)" 2>nul
 if errorlevel 1 (
     echo [修復] 降級 Jinja2 至 3.1.2 以修復 Gradio 相容問題...
-    python -m pip install "jinja2==3.1.2" --quiet
+    %PYTHON_EXE% -m pip install "jinja2==3.1.2" --quiet
     echo [完成] Jinja2 已修復
+) else (
+    echo [OK] Jinja2 版本相容
 )
 
 :: 清除 Proxy 設定（避免 Gradio 無法綁定 localhost）
@@ -80,6 +100,6 @@ set no_proxy=localhost,127.0.0.1
 :: 啟動 GPT-SoVITS WebUI
 cd GPT-SoVITS
 echo 啟動 GPT-SoVITS...
-python webui.py
+%PYTHON_EXE% webui.py
 
 pause
