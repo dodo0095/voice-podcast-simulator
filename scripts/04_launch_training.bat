@@ -53,23 +53,31 @@ echo  訓練流程說明（WebUI 操作）
 echo ========================================
 echo.
 echo 即將啟動 GPT-SoVITS WebUI
-echo 請依照以下步驟操作：
+echo 請依照順序操作，別跳步（跳步會看到「23456 開頭檔案不存在」錯誤）：
 echo.
-echo 【1. 訓練 SoVITS 模型】
-echo   - 切換到「SoVITS 訓練」分頁
-echo   - 「訓練列表路徑」填入:
+echo 【1. 切到「1-GPT-SoVITS-TTS」分頁，填頂部欄位】
+echo   - 實驗名 (experiment_name):      my_voice
+echo   - 標註文件路徑 (inp_text):
 echo     %DATASET_LIST%
-echo   - 「實驗名稱」填入: my_voice
+echo   - 音頻切片目錄 (inp_wav_dir):
+echo     %PROJECT_ROOT%\data\sliced
+echo   - GPU 編號:                     0
+echo.
+echo 【2. 切「1A-訓練集格式化工具」子分頁，按「一鍵三連」】
+echo   - 會依序跑：1Aa 文本獲取 → 1Ab SSL 特徵 → 1Ac 語義特徵
+echo   - 完成後 GPT-SoVITS\logs\my_voice\ 會有：
+echo       2-name2text.txt、3-bert\、4-cnhubert\、5-wav32k\、6-name2semantic.tsv
+echo   - 這一步完成後才能訓練，不做會報「23456 檔案不存在」
+echo.
+echo 【3. 切「1B-SoVITS 訓練」子分頁】
 echo   - Epoch 設定: 8（資料多可設 16）
-echo   - 點擊「一鍵三連」開始訓練
+echo   - 點擊「開始 SoVITS 訓練」
 echo.
-echo 【2. 訓練 GPT 模型】
-echo   - 切換到「GPT 訓練」分頁
-echo   - 同樣填入訓練列表路徑
+echo 【4. 切「1C-GPT 訓練」子分頁】
 echo   - Epoch 設定: 15
-echo   - 點擊開始訓練
+echo   - 點擊「開始 GPT 訓練」
 echo.
-echo 【3. 訓練完成後】
+echo 【5. 訓練完成後】
 echo   - 找到訓練產生的 .pth 和 .ckpt 檔案
 echo   - 複製到 models\ 資料夾
 echo   - 更新 configs\voice_config.yaml 中的模型路徑
