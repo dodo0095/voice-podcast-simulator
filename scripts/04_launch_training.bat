@@ -64,5 +64,18 @@ pause
 cd GPT-SoVITS
 echo 啟動 GPT-SoVITS...
 python webui.py
+set WEBUI_EXIT=%errorlevel%
 
+if not "%WEBUI_EXIT%"=="0" (
+    echo.
+    echo ========================================
+    echo  [錯誤] GPT-SoVITS WebUI 啟動失敗（exit %WEBUI_EXIT%）
+    echo ========================================
+    echo.
+    echo 若錯誤訊息含有：
+    echo   ModuleNotFoundError: No module named 'starlette._exception_handler'
+    echo 代表 FastAPI / Starlette / Gradio 版本衝突，請執行：
+    echo   setup\fix_dependencies.bat
+    echo.
+)
 pause
