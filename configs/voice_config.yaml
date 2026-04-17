@@ -25,6 +25,7 @@ transcribe:
   language: "zh"            # 轉錄語言
   beam_size: 5              # 解碼 beam size（越大越準但越慢）
   vad_filter: true          # 啟用 VAD 過濾靜音段
+  confidence_threshold: -0.8  # Whisper 信心門檻（-0.8 適合中文；更嚴格可改 -0.6）
 
 # 訓練設定（供參考，實際在 GPT-SoVITS WebUI 設定）
 training:
