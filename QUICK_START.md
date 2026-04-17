@@ -80,14 +80,18 @@ data/transcripts/dataset_list.txt    ← 訓練清單
 ### 【Step 3】人工校稿（重要！）
 
 ```bash
+# 一般模式（互動校稿）
 python scripts/03_validate_dataset.py
+
+# 快速模式（跳過校稿，全部保留）
+python scripts/03_validate_dataset.py --skip
 ```
 
 **做了什麼：**
 - 顯示每段的轉錄文字
 - 讓你確認/修正/刪除
 
-**操作按鍵：**
+**操作按鍵（一般模式）：**
 | 按鍵 | 動作 |
 |------|------|
 | Enter | 保留（轉錄正確） |
@@ -97,6 +101,7 @@ python scripts/03_validate_dataset.py
 | s | 儲存並離開 |
 
 > 💡 不需要校稿 100%，抽查幾十筆、刪掉明顯錯誤的就夠了
+> 💡 `--skip` 模式會把全部資料直接寫入 `dataset_validated.txt`，適合快速測試流程
 
 **完成後看到：**
 ```

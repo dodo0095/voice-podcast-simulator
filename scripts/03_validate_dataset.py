@@ -10,6 +10,7 @@ Step 3: 資料集校稿工具
 import os
 import sys
 import yaml
+import argparse
 import subprocess
 from pathlib import Path
 from colorama import init, Fore, Style
@@ -225,7 +226,22 @@ def print_final_summary(validated_count: int, rejected_count: int):
     print(f"  方式 B: python scripts/04_launch_training.bat\n")
 
 
+def skip_validation(entries: list[dict]):
+    """跳過校稿，全部標記為 keep"""
+    for e in entries:
+        if e["status"] == "pending":
+            e["status"] = "keep"
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Step 3: 資料集校稿工具")
+    parser.add_argument(
+        "--skip",
+        action="store_true",
+        help="跳過人工校稿，全部保留並直接產出 dataset_validated.txt",
+    )
+    args = parser.parse_args()
+
     print_header()
 
     if not DATASET_LIST.exists():
@@ -240,6 +256,15 @@ def main():
     total = len(entries)
     print(f"共 {Fore.YELLOW}{total}{Style.RESET_ALL} 筆資料\n")
 
+    # ── 跳過模式 ──────────────────────────────────────────
+    if args.skip:
+        print(f"{Fore.YELLOW}[--skip] 跳過人工校稿，全部資料標記為保留{Style.RESET_ALL}\n")
+        skip_validation(entries)
+        validated_count, rejected_count = save_progress(entries)
+        print_final_summary(validated_count, rejected_count)
+        return
+
+    # ── 一般互動流程 ───────────────────────────────────────
     # 顯示統計
     print_stats(entries)
 
