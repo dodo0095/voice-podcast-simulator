@@ -60,6 +60,14 @@ echo ========================================
 echo.
 pause
 
+:: 清除 Proxy 設定（避免 Gradio 無法綁定 localhost）
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set http_proxy=
+set https_proxy=
+set NO_PROXY=localhost,127.0.0.1
+set no_proxy=localhost,127.0.0.1
+
 :: 啟動 GPT-SoVITS WebUI
 cd GPT-SoVITS
 echo 啟動 GPT-SoVITS...
