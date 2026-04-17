@@ -67,9 +67,7 @@ echo [OK] GPT-SoVITS 套件安裝完成
 
 echo.
 echo [步驟 4/4] 安裝推論介面套件...
-:: 注意：同時升級 fastapi / starlette，避免與 GPT-SoVITS 原始 requirements 衝突
-:: 常見症狀：ModuleNotFoundError: No module named 'starlette._exception_handler'
-pip install --upgrade "gradio>=4.44.0" "fastapi>=0.110.0" "starlette>=0.36.3" pyyaml colorama
+pip install gradio>=4.0.0 pyyaml colorama
 echo [OK] 推論套件安裝完成
 
 echo.

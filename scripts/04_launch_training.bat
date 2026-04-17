@@ -9,6 +9,24 @@ cd /d "%~dp0\.."
 set PROJECT_ROOT=%CD%
 set DATASET_LIST=%PROJECT_ROOT%\data\transcripts\dataset_validated.txt
 
+:: 偵測 Python 路徑（優先用 C:\py310，其次用系統 python）
+set PYTHON_EXE=
+if exist "C:\py310\python.exe" (
+    set PYTHON_EXE=C:\py310\python.exe
+) else (
+    where python >nul 2>&1
+    if not errorlevel 1 (
+        set PYTHON_EXE=python
+    )
+)
+
+if "%PYTHON_EXE%"=="" (
+    echo [錯誤] 找不到 Python，請確認安裝路徑
+    pause
+    exit /b 1
+)
+echo 使用 Python: %PYTHON_EXE%
+
 :: 確認資料集存在
 if not exist "%DATASET_LIST%" (
     echo [錯誤] 找不到驗證後的資料集: %DATASET_LIST%
@@ -60,22 +78,29 @@ echo ========================================
 echo.
 pause
 
+:: 修復 Starlette 版本相容問題
+:: 需要 ==0.27.0：>= 0.27 讓 FastAPI 找到 _exception_handler，< 0.28 讓舊 Gradio TemplateResponse 正常運作
+echo 檢查 Starlette 版本...
+%PYTHON_EXE% -c "import starlette; exit(0 if starlette.__version__ == '0.27.0' else 1)" 2>nul
+if errorlevel 1 (
+    echo [修復] 安裝 Starlette 0.27.0（FastAPI + Gradio 相容版本）...
+    %PYTHON_EXE% -m pip install "starlette==0.27.0" --quiet
+    echo [完成] Starlette 已修復
+) else (
+    echo [OK] Starlette 版本相容 ^(0.27.0^)
+)
+
+:: 清除 Proxy 設定（避免 Gradio 無法綁定 localhost）
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set http_proxy=
+set https_proxy=
+set NO_PROXY=localhost,127.0.0.1
+set no_proxy=localhost,127.0.0.1
+
 :: 啟動 GPT-SoVITS WebUI
 cd GPT-SoVITS
 echo 啟動 GPT-SoVITS...
-python webui.py
-set WEBUI_EXIT=%errorlevel%
+%PYTHON_EXE% webui.py
 
-if not "%WEBUI_EXIT%"=="0" (
-    echo.
-    echo ========================================
-    echo  [錯誤] GPT-SoVITS WebUI 啟動失敗（exit %WEBUI_EXIT%）
-    echo ========================================
-    echo.
-    echo 若錯誤訊息含有：
-    echo   ModuleNotFoundError: No module named 'starlette._exception_handler'
-    echo 代表 FastAPI / Starlette / Gradio 版本衝突，請執行：
-    echo   setup\fix_dependencies.bat
-    echo.
-)
 pause

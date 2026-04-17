@@ -1,38 +1,58 @@
 @echo off
 chcp 65001 > nul
 echo ========================================
-echo  修復 FastAPI / Starlette / Gradio 版本衝突
+echo  修復 GPT-SoVITS 相依套件（Starlette / Proxy）
 echo ========================================
 echo.
-echo 症狀：啟動 webui.py 時出現
+echo 症狀一：啟動 webui.py 時出現
 echo   ModuleNotFoundError: No module named 'starlette._exception_handler'
+echo 症狀二：Gradio TemplateResponse 相關錯誤
 echo.
-echo 原因：GPT-SoVITS requirements 與 gradio 版本不相容
+echo 正確解法：把 starlette 鎖定在 0.27.0（FastAPI 找得到、舊 Gradio 也能用）
 echo.
-echo ----------------------------------------
-echo 顯示當前版本...
-echo ----------------------------------------
-python -m pip show fastapi starlette gradio 2>nul | findstr /i "Name: Version:"
+
+:: 偵測 Python 路徑（優先用 C:\py310，其次用系統 python）
+set PYTHON_EXE=
+if exist "C:\py310\python.exe" (
+    set PYTHON_EXE=C:\py310\python.exe
+) else (
+    where python >nul 2>&1
+    if not errorlevel 1 (
+        set PYTHON_EXE=python
+    )
+)
+
+if "%PYTHON_EXE%"=="" (
+    echo [錯誤] 找不到 Python，請確認安裝路徑
+    pause
+    exit /b 1
+)
+echo 使用 Python: %PYTHON_EXE%
 echo.
+
 echo ----------------------------------------
-echo 升級至相容版本（fastapi 0.110+、starlette 0.36+、gradio 4.44+）
+echo 當前版本...
 echo ----------------------------------------
-python -m pip install --upgrade "fastapi>=0.110.0" "starlette>=0.36.3" "gradio>=4.44.0"
+%PYTHON_EXE% -m pip show starlette fastapi gradio 2>nul | findstr /i "Name: Version:"
+echo.
+
+echo ----------------------------------------
+echo 鎖定 starlette==0.27.0
+echo ----------------------------------------
+%PYTHON_EXE% -m pip install "starlette==0.27.0"
 if errorlevel 1 (
-    echo.
-    echo [錯誤] 套件升級失敗，請確認：
-    echo   1. Python 是否為 C:\py310 或其他預期路徑
-    echo   2. 是否有網路連線
-    echo   3. 是否需要 --user 或以系統管理員身分執行
+    echo [錯誤] 套件安裝失敗，請確認網路或 Python 路徑
     pause
     exit /b 1
 )
 echo.
+
 echo ----------------------------------------
-echo 升級後版本...
+echo 修復後版本...
 echo ----------------------------------------
-python -m pip show fastapi starlette gradio 2>nul | findstr /i "Name: Version:"
+%PYTHON_EXE% -m pip show starlette fastapi gradio 2>nul | findstr /i "Name: Version:"
 echo.
+
 echo ========================================
 echo  修復完成！請重新執行 scripts\04_launch_training.bat
 echo ========================================
