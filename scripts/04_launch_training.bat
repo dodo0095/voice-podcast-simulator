@@ -78,15 +78,16 @@ echo ========================================
 echo.
 pause
 
-:: 修復 Starlette 版本相容問題（0.28+ 改變 TemplateResponse API，導致舊 Gradio 崩潰）
+:: 修復 Starlette 版本相容問題
+:: 需要 ==0.27.0：>= 0.27 讓 FastAPI 找到 _exception_handler，< 0.28 讓舊 Gradio TemplateResponse 正常運作
 echo 檢查 Starlette 版本...
-%PYTHON_EXE% -c "import starlette; v=tuple(int(x) for x in starlette.__version__.split('.')[:2]); exit(0 if v < (0,28) else 1)" 2>nul
+%PYTHON_EXE% -c "import starlette; exit(0 if starlette.__version__ == '0.27.0' else 1)" 2>nul
 if errorlevel 1 (
-    echo [修復] 降級 Starlette 至相容版本以修復 Gradio TemplateResponse 崩潰...
-    %PYTHON_EXE% -m pip install "starlette<0.28" --quiet
+    echo [修復] 安裝 Starlette 0.27.0（FastAPI + Gradio 相容版本）...
+    %PYTHON_EXE% -m pip install "starlette==0.27.0" --quiet
     echo [完成] Starlette 已修復
 ) else (
-    echo [OK] Starlette 版本相容
+    echo [OK] Starlette 版本相容 ^(0.27.0^)
 )
 
 :: 清除 Proxy 設定（避免 Gradio 無法綁定 localhost）
