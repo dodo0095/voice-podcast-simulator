@@ -69,19 +69,31 @@ python scripts/03_validate_dataset.py
 
 ### 4. 訓練模型
 
+**方式 A：CLI（推薦，不需要 WebUI）**
+
+```bat
+scripts\04_train_cli.bat
+```
+
+全自動執行完整訓練流程，無需在瀏覽器操作：
+1. 資料集格式化（一鍵三連）
+2. SoVITS 模型訓練
+3. GPT 模型訓練
+4. 自動複製模型至 `models/`
+
+> ⏱ 訓練時間約 1~4 小時（依資料量與 GPU 而定）
+
+**方式 B：WebUI（備用，如 CLI 有問題）**
+
 ```bat
 scripts\04_launch_training.bat
 ```
 
-瀏覽器開啟 GPT-SoVITS WebUI，依序訓練 SoVITS + GPT 模型（約 1~4 小時）。
+瀏覽器開啟 GPT-SoVITS WebUI，手動操作訓練。
 
-訓練完成後，將模型複製至：
+---
 
-```
-models/
-├── sovits_model.pth
-└── gpt_model.ckpt
-```
+> 💡 VRAM 不足（OOM）時，請修改 `configs/voice_config.yaml` 將 `batch_size: 4` 改為 `2`
 
 ---
 
@@ -129,7 +141,9 @@ voice/
 │   ├── 01_preprocess.py        ← 音訊前處理
 │   ├── 02_transcribe.py        ← Whisper 自動轉錄
 │   ├── 03_validate_dataset.py  ← 校稿工具
-│   └── 04_launch_training.bat  ← 啟動 GPT-SoVITS WebUI
+│   ├── 04_train_cli.bat        ← CLI 訓練（推薦，不需 WebUI）
+│   ├── 04_train_cli.py         ← CLI 訓練核心邏輯
+│   └── 04_launch_training.bat  ← 啟動 GPT-SoVITS WebUI（備用）
 ├── infer/
 │   ├── infer_cli.py            ← CLI 推論
 │   ├── infer_ui.py             ← Web UI 推論
