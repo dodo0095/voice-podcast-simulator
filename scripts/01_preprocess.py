@@ -1,255 +1,219 @@
 #!/usr/bin/env python3
-"""
-Step 1: 音訊前處理
-- 掃描 data/raw/ 下的所有 MP3 檔案
-- 轉換為 WAV（16kHz, 單聲道）
-- 正規化音量
-- 依靜音切段（每段 3~10 秒）
-- 輸出到 data/sliced/
+"""Prepare raw voice recordings for GPT-SoVITS fine-tuning.
+
+The script reads audio files from data/raw, converts them to mono WAV, splits
+them into trainable 3-12 second clips, normalizes loudness, and writes metadata
+for later auditing.
 """
 
-import os
-import sys
-import yaml
+from __future__ import annotations
+
+import argparse
+import csv
 import logging
+import shutil
+import sys
 from pathlib import Path
-from tqdm import tqdm
-from colorama import init, Fore, Style
 
-# 初始化 colorama（Windows 色彩支援）
+import yaml
+from colorama import Fore, Style, init
+from tqdm import tqdm
+
 init()
 
-# ── 路徑設定 ──────────────────────────────────────────
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "configs" / "voice_config.yaml"
-RAW_DIR = ROOT / "data" / "raw"
-SLICED_DIR = ROOT / "data" / "sliced"
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".wma"}
 
-# ── 載入設定 ──────────────────────────────────────────
-with open(CONFIG_PATH, encoding="utf-8") as f:
-    config = yaml.safe_load(f)
-
-cfg = config["preprocess"]
-SAMPLE_RATE = cfg["sample_rate"]
-MIN_SEC = cfg["min_segment_sec"]
-MAX_SEC = cfg["max_segment_sec"]
-TARGET_DB = cfg["target_db"]
-SILENCE_DB = cfg["silence_threshold_db"]
-SILENCE_MS = cfg["silence_min_ms"]
-SPEAKER = config["speaker"]["name"]
-
-# ── 日誌設定 ──────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+log = logging.getLogger("preprocess")
 
 
-def print_header():
-    print(f"\n{Fore.CYAN}{'='*50}")
-    print("  Step 1: 音訊前處理")
-    print(f"{'='*50}{Style.RESET_ALL}\n")
+def load_config() -> dict:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
-def check_ffmpeg():
-    """確認 ffmpeg 已安裝"""
-    import shutil
+def rel_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def check_ffmpeg() -> None:
     if not shutil.which("ffmpeg"):
-        print(f"{Fore.RED}[錯誤] 找不到 ffmpeg！")
-        print("請下載並安裝 ffmpeg: https://ffmpeg.org/download.html")
-        print("安裝後確認 ffmpeg 在 PATH 中{Style.RESET_ALL}")
-        sys.exit(1)
-    print(f"{Fore.GREEN}[OK] ffmpeg 已就緒{Style.RESET_ALL}")
+        raise SystemExit(
+            "找不到 ffmpeg。請先安裝 ffmpeg，並確認 ffmpeg.exe 可以在 PATH 中執行。"
+        )
 
 
-def get_audio_files() -> list[Path]:
-    """掃描 raw 資料夾，取得所有音訊檔案"""
-    extensions = [".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"]
-    files = []
-    for ext in extensions:
-        files.extend(RAW_DIR.glob(f"*{ext}"))
-        files.extend(RAW_DIR.glob(f"**/*{ext}"))  # 支援子資料夾
-
-    files = sorted(set(files))
-    return files
+def find_audio_files(raw_dir: Path) -> list[Path]:
+    files = [
+        p for p in raw_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+    return sorted(files)
 
 
-def normalize_audio(audio):
-    """正規化音量到目標 dBFS"""
-    from pydub import AudioSegment
-    change_in_dBFS = TARGET_DB - audio.dBFS
-    return audio.apply_gain(change_in_dBFS)
+def normalize_dbfs(audio: AudioSegment, target_dbfs: float) -> AudioSegment:
+    if audio.dBFS == float("-inf"):
+        return audio
+    return audio.apply_gain(target_dbfs - audio.dBFS)
 
 
-def slice_on_silence(audio, min_silence_ms: int, silence_db: float):
-    """依靜音切段音訊"""
+def split_audio(audio: AudioSegment, cfg: dict) -> list[AudioSegment]:
     from pydub.silence import split_on_silence
 
     chunks = split_on_silence(
         audio,
-        min_silence_len=min_silence_ms,
-        silence_thresh=silence_db,
-        keep_silence=200,  # 保留 200ms 靜音作緩衝
+        min_silence_len=int(cfg["silence_min_ms"]),
+        silence_thresh=float(cfg["silence_threshold_db"]),
+        keep_silence=int(cfg["keep_silence_ms"]),
     )
-    return chunks
+    return chunks or [audio]
 
 
-def merge_short_chunks(chunks, min_ms: float, max_ms: float):
-    """
-    合併太短的片段，切分太長的片段
-    目標：每段 min_ms ~ max_ms 毫秒
-    """
-    min_ms = int(min_ms * 1000)
-    max_ms = int(max_ms * 1000)
+def fit_segment_lengths(
+    chunks: list[AudioSegment],
+    min_ms: int,
+    max_ms: int,
+) -> list[AudioSegment]:
+    from pydub import AudioSegment
 
-    merged = []
-    current = None
+    merged: list[AudioSegment] = []
+    current = AudioSegment.silent(duration=0)
 
     for chunk in chunks:
-        if current is None:
+        if len(chunk) > max_ms:
+            if len(current) >= min_ms:
+                merged.append(current)
+            current = AudioSegment.silent(duration=0)
+            for start in range(0, len(chunk), max_ms):
+                part = chunk[start:start + max_ms]
+                if len(part) >= min_ms:
+                    merged.append(part)
+            continue
+
+        if len(current) == 0:
             current = chunk
         elif len(current) + len(chunk) <= max_ms:
-            current = current + chunk
+            current += chunk
         else:
             if len(current) >= min_ms:
                 merged.append(current)
             current = chunk
 
-    if current is not None and len(current) >= min_ms:
+    if len(current) >= min_ms:
         merged.append(current)
 
-    # 切分過長的片段
-    result = []
-    for chunk in merged:
-        if len(chunk) <= max_ms:
-            result.append(chunk)
-        else:
-            # 強制切割
-            start = 0
-            while start < len(chunk):
-                end = min(start + max_ms, len(chunk))
-                part = chunk[start:end]
-                if len(part) >= min_ms:
-                    result.append(part)
-                start = end
-
-    return result
+    return [seg for seg in merged if min_ms <= len(seg) <= max_ms]
 
 
-def process_file(src_path: Path, file_idx: int) -> list[Path]:
-    """處理單一音訊檔案，返回切段後的檔案路徑列表"""
+def process_file(
+    src: Path,
+    file_index: int,
+    cfg: dict,
+    speaker: str,
+    sliced_dir: Path,
+) -> list[dict]:
     from pydub import AudioSegment
 
-    try:
-        # 載入音訊
-        audio = AudioSegment.from_file(str(src_path))
+    audio = AudioSegment.from_file(src)
+    audio = audio.set_channels(int(cfg["channels"])).set_frame_rate(int(cfg["sample_rate"]))
+    audio = normalize_dbfs(audio, float(cfg["target_dbfs"]))
 
-        # 轉換：單聲道 + 目標取樣率
-        audio = audio.set_channels(1).set_frame_rate(SAMPLE_RATE)
+    raw_chunks = split_audio(audio, cfg)
+    segments = fit_segment_lengths(
+        raw_chunks,
+        min_ms=int(float(cfg["min_segment_sec"]) * 1000),
+        max_ms=int(float(cfg["max_segment_sec"]) * 1000),
+    )
 
-        # 正規化音量
-        audio = normalize_audio(audio)
+    rows: list[dict] = []
+    for segment_index, segment in enumerate(segments, start=1):
+        dbfs = segment.dBFS
+        if dbfs == float("-inf"):
+            continue
+        if dbfs < float(cfg["min_dbfs"]) or dbfs > float(cfg["max_dbfs"]):
+            continue
 
-        # 切段
-        chunks = slice_on_silence(audio, SILENCE_MS, SILENCE_DB)
+        out_name = f"{speaker}_{file_index:04d}_{segment_index:04d}.wav"
+        out_path = sliced_dir / out_name
+        segment.export(out_path, format="wav")
+        rows.append({
+            "audio_path": rel_path(out_path),
+            "source_path": rel_path(src),
+            "duration_sec": f"{len(segment) / 1000:.3f}",
+            "dbfs": f"{dbfs:.2f}",
+            "sample_rate": cfg["sample_rate"],
+        })
 
-        if not chunks:
-            log.warning(f"  {src_path.name}: 找不到靜音切點，整段保留")
-            chunks = [audio]
-
-        # 合併/調整長度
-        chunks = merge_short_chunks(chunks, MIN_SEC, MAX_SEC)
-
-        if not chunks:
-            log.warning(f"  {src_path.name}: 處理後無有效片段，跳過")
-            return []
-
-        # 儲存切段
-        saved = []
-        for seg_idx, chunk in enumerate(chunks, start=1):
-            out_name = f"{SPEAKER}_{file_idx:04d}_{seg_idx:04d}.wav"
-            out_path = SLICED_DIR / out_name
-            chunk.export(str(out_path), format="wav")
-            saved.append(out_path)
-
-        total_sec = sum(len(c) for c in chunks) / 1000
-        log.info(f"  {src_path.name}: {len(chunks)} 段, 共 {total_sec:.1f} 秒")
-        return saved
-
-    except Exception as e:
-        log.error(f"  {src_path.name}: 處理失敗 — {e}")
-        return []
+    return rows
 
 
-def print_summary(all_segments: list[Path]):
-    """輸出統計摘要"""
-    from pydub import AudioSegment
-
-    total_files = len(all_segments)
-    if total_files == 0:
-        print(f"\n{Fore.RED}沒有產生任何切段，請確認 data/raw/ 中有音訊檔案{Style.RESET_ALL}")
-        return
-
-    # 計算總時長
-    total_ms = 0
-    for seg_path in all_segments:
-        try:
-            audio = AudioSegment.from_wav(str(seg_path))
-            total_ms += len(audio)
-        except:
-            pass
-
-    total_min = total_ms / 1000 / 60
-
-    print(f"\n{Fore.GREEN}{'='*50}")
-    print(f"  前處理完成！")
-    print(f"{'='*50}{Style.RESET_ALL}")
-    print(f"  切段數量: {Fore.YELLOW}{total_files} 段{Style.RESET_ALL}")
-    print(f"  總時長:   {Fore.YELLOW}{total_min:.1f} 分鐘{Style.RESET_ALL}")
-    print(f"  輸出位置: {SLICED_DIR}")
-    print()
-
-    if total_min < 30:
-        print(f"{Fore.YELLOW}[建議] 訓練資料少於 30 分鐘，品質可能不穩定")
-        print(f"建議補充更多錄音到 data/raw/{Style.RESET_ALL}")
-    elif total_min >= 60:
-        print(f"{Fore.GREEN}[良好] 訓練資料充足（{total_min:.0f} 分鐘），預期品質優秀！{Style.RESET_ALL}")
-
-    print(f"\n{Fore.CYAN}下一步: python scripts/02_transcribe.py{Style.RESET_ALL}\n")
+def write_metadata(rows: list[dict], transcript_dir: Path) -> None:
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = transcript_dir / "segments.csv"
+    with open(metadata_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["audio_path", "source_path", "duration_sec", "dbfs", "sample_rate"],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
 
 
-def main():
-    print_header()
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Split and normalize raw voice recordings.")
+    parser.add_argument("--clean", action="store_true", help="Delete existing data/sliced before processing.")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    config = load_config()
+    paths = config["paths"]
+    cfg = config["preprocess"]
+    speaker = config["speaker"]["name"]
+
+    raw_dir = ROOT / paths["raw_dir"]
+    sliced_dir = ROOT / paths["sliced_dir"]
+    transcript_dir = ROOT / paths["transcript_dir"]
+
+    print(f"\n{Fore.CYAN}Step 1: prepare audio segments{Style.RESET_ALL}")
     check_ffmpeg()
 
-    # 確認目錄
-    if not RAW_DIR.exists():
-        RAW_DIR.mkdir(parents=True)
-        print(f"{Fore.YELLOW}[提示] 已建立 data/raw/ 資料夾")
-        print(f"請將你的 MP3 檔案放入 data/raw/ 後再執行此腳本{Style.RESET_ALL}")
-        sys.exit(0)
+    if not raw_dir.exists():
+        raw_dir.mkdir(parents=True)
+        raise SystemExit(f"已建立 {rel_path(raw_dir)}，請先把 mp3/wav 放進去。")
 
-    SLICED_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 掃描音訊檔案
-    audio_files = get_audio_files()
+    audio_files = find_audio_files(raw_dir)
     if not audio_files:
-        print(f"{Fore.RED}[錯誤] data/raw/ 中找不到音訊檔案")
-        print(f"支援格式: mp3, wav, m4a, aac, flac, ogg{Style.RESET_ALL}")
-        sys.exit(1)
+        raise SystemExit(f"{rel_path(raw_dir)} 裡沒有可處理的音檔。")
 
-    print(f"找到 {Fore.YELLOW}{len(audio_files)}{Style.RESET_ALL} 個音訊檔案\n")
+    if args.clean and sliced_dir.exists():
+        shutil.rmtree(sliced_dir)
+    sliced_dir.mkdir(parents=True, exist_ok=True)
 
-    # 處理每個檔案
-    all_segments = []
-    for idx, audio_file in enumerate(tqdm(audio_files, desc="處理中", unit="檔"), start=1):
-        segments = process_file(audio_file, idx)
-        all_segments.extend(segments)
+    all_rows: list[dict] = []
+    for index, src in enumerate(tqdm(audio_files, desc="Processing", unit="file"), start=1):
+        try:
+            rows = process_file(src, index, cfg, speaker, sliced_dir)
+            all_rows.extend(rows)
+        except Exception as exc:
+            log.warning("跳過 %s：%s", rel_path(src), exc)
 
-    # 輸出摘要
-    print_summary(all_segments)
+    write_metadata(all_rows, transcript_dir)
+
+    total_minutes = sum(float(row["duration_sec"]) for row in all_rows) / 60
+    print(f"\n完成：{len(all_rows)} 段，約 {total_minutes:.1f} 分鐘")
+    print(f"輸出：{rel_path(sliced_dir)}")
+    print(f"metadata：{rel_path(transcript_dir / 'segments.csv')}")
+
+    quality = config["quality"]
+    if total_minutes < float(quality["min_total_minutes"]):
+        print(f"{Fore.YELLOW}提醒：可用語音少於 {quality['min_total_minutes']} 分鐘，fine-tune 品質可能有限。{Style.RESET_ALL}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,3 @@
-# 音訊前處理相依套件
 pydub>=0.25.1
 ffmpeg-python>=0.2.0
 faster-whisper>=1.0.0
@@ -8,5 +7,5 @@ colorama>=0.4.6
 pandas>=2.0.0
 soundfile>=0.12.1
 librosa>=0.10.0
-webrtcvad>=2.0.10
 pyyaml>=6.0
+gradio>=4.0.0

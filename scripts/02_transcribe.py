@@ -1,238 +1,173 @@
 #!/usr/bin/env python3
-"""
-Step 2: 自動語音轉錄（ASR）
-- 使用 Faster-Whisper large-v3 模型
-- 轉錄 data/sliced/ 中所有 WAV 片段
-- 輸出 data/transcripts/dataset_list.txt（GPT-SoVITS 訓練格式）
-"""
+"""Transcribe prepared voice segments with faster-whisper."""
 
-import os
+from __future__ import annotations
+
+import argparse
+import csv
 import sys
-import yaml
-import logging
 from pathlib import Path
+
+import yaml
+from colorama import Fore, Style, init
 from tqdm import tqdm
-from colorama import init, Fore, Style
 
 init()
 
-# ── 路徑設定 ──────────────────────────────────────────
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "configs" / "voice_config.yaml"
-SLICED_DIR = ROOT / "data" / "sliced"
-TRANSCRIPT_DIR = ROOT / "data" / "transcripts"
-DATASET_LIST = TRANSCRIPT_DIR / "dataset_list.txt"
-FAILED_LOG = TRANSCRIPT_DIR / "failed.txt"
-
-# ── 載入設定 ──────────────────────────────────────────
-with open(CONFIG_PATH, encoding="utf-8") as f:
-    config = yaml.safe_load(f)
-
-cfg = config["transcribe"]
-MODEL_SIZE = cfg["model_size"]
-DEVICE = cfg["device"]
-COMPUTE_TYPE = cfg["compute_type"]
-LANGUAGE = cfg["language"]
-BEAM_SIZE = cfg["beam_size"]
-VAD_FILTER = cfg["vad_filter"]
-SPEAKER = config["speaker"]["name"]
-LANG_CODE = config["speaker"]["language"]
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%H:%M:%S",
-)
-log = logging.getLogger(__name__)
 
 
-def print_header():
-    print(f"\n{Fore.CYAN}{'='*50}")
-    print("  Step 2: 自動語音轉錄（ASR）")
-    print(f"{'='*50}{Style.RESET_ALL}\n")
-    print(f"  模型: {Fore.YELLOW}{MODEL_SIZE}{Style.RESET_ALL}")
-    print(f"  裝置: {Fore.YELLOW}{DEVICE}{Style.RESET_ALL}")
-    print(f"  語言: {Fore.YELLOW}{LANGUAGE}{Style.RESET_ALL}\n")
+def load_config() -> dict:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
-def load_whisper_model():
-    """載入 Faster-Whisper 模型"""
+def rel_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def load_model(cfg: dict):
     try:
         from faster_whisper import WhisperModel
-    except ImportError:
-        print(f"{Fore.RED}[錯誤] 找不到 faster-whisper")
-        print(f"請執行: pip install faster-whisper{Style.RESET_ALL}")
-        sys.exit(1)
+    except ImportError as exc:
+        raise SystemExit("缺少 faster-whisper，請先執行 setup\\install.bat 或 pip install faster-whisper。") from exc
 
-    print(f"正在載入 Whisper {MODEL_SIZE} 模型...")
-    print(f"（首次執行會自動下載，約 3GB，請耐心等候）\n")
-
+    print(f"載入 Whisper：{cfg['model_size']} ({cfg['device']}, {cfg['compute_type']})")
     try:
-        model = WhisperModel(
-            MODEL_SIZE,
-            device=DEVICE,
-            compute_type=COMPUTE_TYPE,
+        return WhisperModel(
+            cfg["model_size"],
+            device=cfg["device"],
+            compute_type=cfg["compute_type"],
         )
-        print(f"{Fore.GREEN}[OK] 模型載入完成{Style.RESET_ALL}\n")
-        return model
-    except Exception as e:
-        log.error(f"模型載入失敗: {e}")
-        if "cuda" in str(e).lower():
-            print(f"{Fore.YELLOW}[提示] GPU 不可用，改用 CPU 模式（會較慢）{Style.RESET_ALL}")
-            model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
-            return model
+    except Exception:
+        if cfg["device"] == "cuda":
+            print(f"{Fore.YELLOW}CUDA 載入失敗，改用 CPU/int8。{Style.RESET_ALL}")
+            return WhisperModel(cfg["model_size"], device="cpu", compute_type="int8")
         raise
 
 
-def transcribe_file(model, wav_path: Path) -> str | None:
-    """轉錄單一 WAV 檔，返回文字（含信心分數過濾）"""
-    # 信心分數門檻：avg_logprob 越接近 0 越好，-1.0 以下通常是胡言亂語
-    CONFIDENCE_THRESHOLD = cfg.get("confidence_threshold", -0.8)
+def transcribe_one(model, wav_path: Path, cfg: dict, asr_language: str) -> tuple[str, float | None]:
+    segments, _info = model.transcribe(
+        str(wav_path),
+        language=asr_language,
+        beam_size=int(cfg["beam_size"]),
+        vad_filter=bool(cfg["vad_filter"]),
+        vad_parameters={"min_silence_duration_ms": 500},
+    )
 
-    try:
-        segments, info = model.transcribe(
-            str(wav_path),
-            language=LANGUAGE,
-            beam_size=BEAM_SIZE,
-            vad_filter=VAD_FILTER,
-            vad_parameters={"min_silence_duration_ms": 500},
-        )
+    texts: list[str] = []
+    scores: list[float] = []
+    threshold = float(cfg["confidence_threshold"])
 
-        # 合併段落文字，同時過濾低信心段落
-        texts = []
-        low_confidence_count = 0
-        total_count = 0
+    for seg in segments:
+        text = seg.text.strip()
+        if not text:
+            continue
+        score = float(seg.avg_logprob)
+        if score < threshold:
+            continue
+        texts.append(text)
+        scores.append(score)
 
-        for seg in segments:
-            total_count += 1
-            text = seg.text.strip()
-            if not text:
+    text = "".join(texts).strip()
+    avg_score = sum(scores) / len(scores) if scores else None
+    return text, avg_score
+
+
+def existing_audio_names(dataset_path: Path) -> set[str]:
+    names: set[str] = set()
+    if not dataset_path.exists():
+        return names
+    with open(dataset_path, encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("|", 3)
+            if len(parts) == 4:
+                names.add(Path(parts[0]).name)
+    return names
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Transcribe data/sliced wav files.")
+    parser.add_argument("--overwrite", action="store_true", help="Recreate transcript files from scratch.")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    config = load_config()
+    paths = config["paths"]
+    cfg = config["transcribe"]
+    speaker = config["speaker"]["name"]
+    lang = config["speaker"]["language"]
+    asr_language = config["speaker"]["asr_language"]
+
+    sliced_dir = ROOT / paths["sliced_dir"]
+    transcript_dir = ROOT / paths["transcript_dir"]
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    dataset_path = transcript_dir / "dataset_list.txt"
+    csv_path = transcript_dir / "transcripts.csv"
+    failed_path = transcript_dir / "failed.txt"
+
+    print(f"\n{Fore.CYAN}Step 2: transcribe segments{Style.RESET_ALL}")
+
+    wav_files = sorted(sliced_dir.glob("*.wav"))
+    if not wav_files:
+        raise SystemExit("data/sliced 沒有 wav，請先執行 python scripts/01_preprocess.py")
+
+    if args.overwrite:
+        for path in [dataset_path, csv_path, failed_path]:
+            if path.exists():
+                path.unlink()
+
+    done = existing_audio_names(dataset_path)
+    pending = [p for p in wav_files if p.name not in done]
+    print(f"總段數：{len(wav_files)}，待轉錄：{len(pending)}")
+    if not pending:
+        print("沒有需要轉錄的新檔案。")
+        return
+
+    model = load_model(cfg)
+    csv_exists = csv_path.exists()
+    min_chars = int(cfg["min_text_chars"])
+    success = 0
+    failed = 0
+
+    with open(dataset_path, "a", encoding="utf-8") as dataset_f, \
+            open(csv_path, "a", newline="", encoding="utf-8") as csv_f, \
+            open(failed_path, "a", encoding="utf-8") as failed_f:
+        writer = csv.DictWriter(csv_f, fieldnames=["audio_path", "text", "avg_logprob"])
+        if not csv_exists:
+            writer.writeheader()
+
+        for wav_path in tqdm(pending, desc="Transcribing", unit="clip"):
+            try:
+                text, avg_score = transcribe_one(model, wav_path, cfg, asr_language)
+            except Exception as exc:
+                failed_f.write(f"{rel_path(wav_path)}\t{exc}\n")
+                failed += 1
                 continue
 
-            # 信心分數過濾（seg.avg_logprob 為負數，越接近 0 越好）
-            if seg.avg_logprob < CONFIDENCE_THRESHOLD:
-                low_confidence_count += 1
-                log.debug(f"低信心段落過濾 ({seg.avg_logprob:.2f}): {text[:20]}")
+            if len(text) < min_chars:
+                failed_f.write(f"{rel_path(wav_path)}\tempty_or_too_short\n")
+                failed += 1
                 continue
 
-            texts.append(text)
+            abs_audio = str(wav_path.resolve())
+            dataset_f.write(f"{abs_audio}|{speaker}|{lang}|{text}\n")
+            writer.writerow({
+                "audio_path": abs_audio,
+                "text": text,
+                "avg_logprob": "" if avg_score is None else f"{avg_score:.4f}",
+            })
+            success += 1
 
-        # 若超過一半的段落低信心，整筆放棄
-        if total_count > 0 and low_confidence_count / total_count > 0.5:
-            log.debug(f"整筆低信心放棄: {wav_path.name}")
-            return None
-
-        full_text = "".join(texts).strip()
-
-        # 過濾：太短或疑似錯誤的轉錄
-        if len(full_text) < 2:
-            return None
-
-        return full_text
-
-    except Exception as e:
-        log.error(f"轉錄失敗 {wav_path.name}: {e}")
-        return None
-
-
-def format_dataset_line(wav_path: Path, text: str) -> str:
-    """
-    GPT-SoVITS 訓練清單格式：
-    音訊路徑|說話人名稱|語言代碼|文字
-    """
-    # 使用相對路徑（方便在 GPU 電腦上調整）
-    rel_path = wav_path.resolve()
-    return f"{rel_path}|{SPEAKER}|{LANG_CODE}|{text}"
-
-
-def load_existing_transcripts() -> dict[str, str]:
-    """讀取已有的轉錄結果（支援斷點續傳）"""
-    existing = {}
-    if DATASET_LIST.exists():
-        with open(DATASET_LIST, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split("|")
-                if len(parts) >= 4:
-                    audio_path = parts[0]
-                    text = parts[3]
-                    filename = Path(audio_path).name
-                    existing[filename] = text
-    return existing
-
-
-def main():
-    print_header()
-
-    # 確認切段資料夾
-    if not SLICED_DIR.exists() or not list(SLICED_DIR.glob("*.wav")):
-        print(f"{Fore.RED}[錯誤] data/sliced/ 中找不到 WAV 檔案")
-        print(f"請先執行: python scripts/01_preprocess.py{Style.RESET_ALL}")
-        sys.exit(1)
-
-    TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 取得所有 WAV 檔案
-    wav_files = sorted(SLICED_DIR.glob("*.wav"))
-    print(f"找到 {Fore.YELLOW}{len(wav_files)}{Style.RESET_ALL} 個切段\n")
-
-    # 載入已有轉錄（斷點續傳）
-    existing = load_existing_transcripts()
-    if existing:
-        print(f"{Fore.GREEN}[斷點續傳] 已有 {len(existing)} 筆轉錄，跳過已完成的{Style.RESET_ALL}\n")
-
-    # 過濾需要轉錄的檔案
-    to_transcribe = [f for f in wav_files if f.name not in existing]
-    print(f"需要轉錄: {Fore.YELLOW}{len(to_transcribe)}{Style.RESET_ALL} 個\n")
-
-    if not to_transcribe:
-        print(f"{Fore.GREEN}所有檔案已轉錄完成！{Style.RESET_ALL}")
-    else:
-        # 載入模型
-        model = load_whisper_model()
-
-        # 轉錄
-        success_count = 0
-        failed_files = []
-
-        with open(DATASET_LIST, "a", encoding="utf-8") as out_f, \
-             open(FAILED_LOG, "a", encoding="utf-8") as fail_f:
-
-            for wav_path in tqdm(to_transcribe, desc="轉錄中", unit="段"):
-                text = transcribe_file(model, wav_path)
-
-                if text:
-                    line = format_dataset_line(wav_path, text)
-                    out_f.write(line + "\n")
-                    out_f.flush()
-                    success_count += 1
-                else:
-                    fail_f.write(str(wav_path) + "\n")
-                    failed_files.append(wav_path.name)
-
-        print(f"\n{Fore.GREEN}轉錄完成：成功 {success_count} 筆{Style.RESET_ALL}")
-        if failed_files:
-            print(f"{Fore.YELLOW}轉錄失敗：{len(failed_files)} 筆（記錄於 data/transcripts/failed.txt）{Style.RESET_ALL}")
-
-    # 統計最終結果
-    if DATASET_LIST.exists():
-        with open(DATASET_LIST, encoding="utf-8") as f:
-            total_lines = sum(1 for line in f if line.strip())
-
-        print(f"\n{Fore.CYAN}{'='*50}")
-        print(f"  轉錄清單統計")
-        print(f"{'='*50}{Style.RESET_ALL}")
-        print(f"  有效轉錄: {Fore.YELLOW}{total_lines} 筆{Style.RESET_ALL}")
-        print(f"  輸出位置: {DATASET_LIST}")
-
-        if total_lines < 100:
-            print(f"\n{Fore.YELLOW}[警告] 訓練資料偏少（< 100 筆），建議至少 300 筆以上{Style.RESET_ALL}")
-        elif total_lines >= 500:
-            print(f"\n{Fore.GREEN}[良好] 訓練資料充足（{total_lines} 筆）！{Style.RESET_ALL}")
-
-    print(f"\n{Fore.CYAN}下一步: python scripts/03_validate_dataset.py  （人工校稿）{Style.RESET_ALL}\n")
+    print(f"\n完成：成功 {success}，失敗/略過 {failed}")
+    print(f"輸出：{rel_path(dataset_path)}")
+    print(f"下一步：python scripts/03_validate_dataset.py")
 
 
 if __name__ == "__main__":

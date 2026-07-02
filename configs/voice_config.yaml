@@ -1,55 +1,70 @@
-# ==========================================
-# AI 聲音克隆設定檔
-# ==========================================
+# Voice clone project settings
 
-# 說話人資訊
 speaker:
-  name: "my_voice"          # 你的聲音代號（英文，不含空格）
-  language: "zh"            # 主要語言: zh=中文, ja=日文, en=英文
+  name: "my_voice"
+  language: "zh"          # GPT-SoVITS: zh, yue, en, ja, ko
+  asr_language: "zh"      # faster-whisper language code
 
-# 音訊前處理設定
+paths:
+  raw_dir: "data/raw"
+  sliced_dir: "data/sliced"
+  transcript_dir: "data/transcripts"
+  reference_dir: "data/reference"
+  output_dir: "output"
+  models_dir: "models"
+  gptsovits_dir: "GPT-SoVITS"
+
 preprocess:
-  sample_rate: 16000        # 取樣率（GPT-SoVITS 要求 16000 或 32000）
-  channels: 1               # 單聲道
-  min_segment_sec: 3.0      # 最短切段秒數
-  max_segment_sec: 10.0     # 最長切段秒數
-  target_db: -23.0          # 目標音量 (LUFS)
-  silence_threshold_db: -40 # 靜音閾值（低於此視為靜音）
-  silence_min_ms: 300       # 最短靜音長度（毫秒）才切段
+  sample_rate: 16000
+  channels: 1
+  min_segment_sec: 3.0
+  max_segment_sec: 12.0
+  target_dbfs: -23.0
+  silence_threshold_db: -40
+  silence_min_ms: 350
+  keep_silence_ms: 180
+  min_dbfs: -38.0
+  max_dbfs: -12.0
+  overwrite: true
 
-# Whisper 轉錄設定
 transcribe:
-  model_size: "large-v3"    # 模型大小: tiny/base/small/medium/large-v3
-  device: "cuda"            # cuda 或 cpu（GPU 電腦用 cuda）
-  compute_type: "float16"   # float16（GPU）或 int8（CPU 節省記憶體）
-  language: "zh"            # 轉錄語言
-  beam_size: 5              # 解碼 beam size（越大越準但越慢）
-  vad_filter: true          # 啟用 VAD 過濾靜音段
-  confidence_threshold: -0.8  # Whisper 信心門檻（-0.8 適合中文；更嚴格可改 -0.6）
+  model_size: "large-v3"
+  device: "cuda"          # use cpu when no NVIDIA GPU is available
+  compute_type: "float16" # cpu usually needs int8
+  beam_size: 5
+  vad_filter: true
+  confidence_threshold: -0.80
+  min_text_chars: 2
 
-# 訓練設定（供參考，實際在 GPT-SoVITS WebUI 設定）
+quality:
+  min_valid_segments: 100
+  good_valid_segments: 300
+  min_total_minutes: 30
+  good_total_minutes: 60
+
+reference:
+  preferred_min_sec: 5.0
+  preferred_max_sec: 10.0
+  preferred_min_chars: 8
+  preferred_max_chars: 60
+  audio: "data/reference/ref.wav"
+  text_file: "data/reference/ref.txt"
+
 training:
-  sovits_epochs: 8          # SoVITS 訓練輪數（建議 8-16）
-  gpt_epochs: 15            # GPT 訓練輪數（建議 15-25）
-  batch_size: 4             # batch size（VRAM 不足時降為 2）
-  save_every_epoch: 4       # 每幾輪存一次 checkpoint
+  exp_name: "my_voice"
+  sovits_epochs: 8
+  gpt_epochs: 15
+  batch_size: 4
+  save_every_epoch: 4
 
-# 推論設定
 inference:
-  # 模型路徑（訓練完後填入）
   sovits_model_path: "models/sovits_model.pth"
   gpt_model_path: "models/gpt_model.ckpt"
-
-  # 參考音訊（用來讓模型知道你的聲音風格）
-  reference_audio: "data/reference/ref.wav"   # 3-10 秒的你的聲音
-  reference_text: ""                           # 參考音訊裡說的話
-
-  # 生成參數
+  reference_audio: "data/reference/ref.wav"
+  reference_text: ""
   top_k: 5
   top_p: 1.0
-  temperature: 1.0
-  speed_factor: 1.0         # 語速（1.0=正常, 0.8=慢, 1.2=快）
-
-  # 輸出設定
-  output_dir: "output"
-  output_format: "wav"      # wav 或 mp3
+  temperature: 0.8
+  speed_factor: 1.0
+  text_split_method: "cut5"
+  output_format: "wav"

@@ -1,219 +1,184 @@
-# 🎙️ Voice Podcast Simulator
+# Voice Clone Studio
 
-> 用自己的聲音，生成 AI Podcast 語音。  
-> 基於 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) 打造的一鍵式聲音克隆工作流程。
+這個專案用來把大量自己的錄音整理成可訓練資料，並接到 GPT-SoVITS 做中文聲音 clone。
 
----
+核心目標不是只拿 30 秒 reference 做 zero-shot，而是把多個音檔整理成乾淨的 few-shot/fine-tune dataset，讓模型真的學到你的音色、語速和說話習慣。
 
-## ✨ 專案簡介
+## 推薦流程
 
-只需準備 **1 小時以上的自己聲音錄音**，本專案可以：
-
-1. 自動切段、轉錄、校稿訓練資料
-2. 訓練專屬於你聲音的 AI 模型
-3. 輸入任意文字 → 生成你的聲音朗讀音訊
-
-適合 Podcast 創作者、有聲書製作、語音內容自動化。
-
----
-
-## 🖥️ 環境需求
-
-| 項目 | 需求 |
-|------|------|
-| OS | Windows 10 / 11 |
-| Python | 3.10（建議用 Conda） |
-| GPU | NVIDIA（VRAM ≥ 8GB 建議） |
-| CUDA | 11.8 或 12.1 |
-| 硬碟空間 | ≥ 20GB |
-| 記憶體 | ≥ 16GB |
-
----
-
-## 🚀 快速開始
-
-### 1. 安裝依賴
+1. 安裝環境
 
 ```bat
 setup\install.bat
+python scripts\00_doctor.py
 ```
 
-> ⏱ 首次安裝約 10~30 分鐘（含下載 GPT-SoVITS 約 2GB）
+GPT-SoVITS 建議 Python 3.10。你目前如果用 Python 3.13，可以跑資料整理腳本，但 GPT-SoVITS 依賴很可能不穩。
 
----
+2. 放入原始錄音
 
-### 2. 準備素材
+把 mp3/wav/m4a/flac 放到：
 
-```
-data/
-├── raw/          ← 把你的 MP3 全部放這裡（建議 ≥ 1 小時）
-└── reference/    ← 準備一段 ref.wav（3~10 秒純人聲）
+```text
+data/raw/
 ```
 
----
+資料越乾淨越好：單人聲、少背景音樂、少混響、不要多人對話。
 
-### 3. 資料前處理
+3. 切段與音量整理
 
-```bash
-# Step 1：音訊切段（MP3 → WAV，依靜音自動分割）
-python scripts/01_preprocess.py
-
-# Step 2：自動轉錄（Whisper large-v3，首次會下載約 3GB）
-python scripts/02_transcribe.py
-
-# Step 3：人工校稿（抽查確認轉錄品質）
-python scripts/03_validate_dataset.py
+```bat
+python scripts\01_preprocess.py --clean
 ```
 
----
+輸出：
 
-### 4. 訓練模型
+```text
+data/sliced/*.wav
+data/transcripts/segments.csv
+```
 
-**方式 A：CLI（推薦，不需要 WebUI）**
+4. Whisper 自動轉錄
+
+```bat
+python scripts\02_transcribe.py
+```
+
+輸出：
+
+```text
+data/transcripts/dataset_list.txt
+data/transcripts/transcripts.csv
+data/transcripts/failed.txt
+```
+
+5. 人工審校
+
+```bat
+python scripts\03_validate_dataset.py
+```
+
+如果只是先快速測試：
+
+```bat
+python scripts\03_validate_dataset.py --skip
+```
+
+正式訓練建議人工聽過並修正文字。文字錯會直接傷害 TTS 品質。
+
+6. 產生 reference clip
+
+```bat
+python scripts\05_make_reference.py
+```
+
+它會從已審校資料挑一段 5-10 秒的乾淨 reference，寫到：
+
+```text
+data/reference/ref.wav
+data/reference/ref.txt
+```
+
+也可以手動指定：
+
+```bat
+python scripts\05_make_reference.py --audio path\to\clip.wav --text "這段音檔實際說的文字"
+```
+
+7. 訓練 GPT-SoVITS
+
+優先試 CLI：
 
 ```bat
 scripts\04_train_cli.bat
 ```
 
-全自動執行完整訓練流程，無需在瀏覽器操作：
-1. 資料集格式化（一鍵三連）
-2. SoVITS 模型訓練
-3. GPT 模型訓練
-4. 自動複製模型至 `models/`
-
-> ⏱ 訓練時間約 1~4 小時（依資料量與 GPU 而定）
-
-**方式 B：WebUI（備用，如 CLI 有問題）**
+如果你的 GPT-SoVITS 版本和 CLI wrapper 不相容，改用官方 WebUI：
 
 ```bat
 scripts\04_launch_training.bat
 ```
 
-瀏覽器開啟 GPT-SoVITS WebUI，手動操作訓練。
+WebUI 內使用：
 
----
+```text
+dataset: data/transcripts/dataset_validated.txt
+wav dir: data/sliced
+experiment: my_voice
+```
 
-> 💡 VRAM 不足（OOM）時，請修改 `configs/voice_config.yaml` 將 `batch_size: 4` 改為 `2`
+訓練完成後，把模型放到：
 
----
+```text
+models/sovits_model.pth
+models/gpt_model.ckpt
+```
 
-### 5. 生成語音
+CLI wrapper 成功時會自動複製最新模型。
 
-**方式 A：Web UI（推薦）**
+8. 推論
+
+```bat
+python infer\infer_cli.py --text "歡迎收聽，史塔克實驗室！"
+```
+
+或開 Web UI：
 
 ```bat
 infer\start_ui.bat
 ```
 
-開啟 http://localhost:7860，輸入文字即可生成。
+輸出會在：
 
-**方式 B：CLI**
-
-```bash
-# 單段生成
-python infer/infer_cli.py --text "大家好，歡迎收聽今天的節目"
-
-# 調整語速
-python infer/infer_cli.py --text "你好" --speed 0.9
-
-# 批次生成（每行一段）
-python infer/infer_cli.py --file podcast_script.txt
+```text
+output/
 ```
 
-輸出音訊儲存於 `output/` 資料夾。
+## 資料量建議
 
----
+最低可測：
 
-## 📁 目錄結構
+- 100 段以上
+- 約 10-30 分鐘乾淨人聲
 
-```
-voice/
-├── configs/
-│   └── voice_config.yaml       ← 主設定檔（模型路徑、訓練/推論參數）
-├── data/
-│   ├── raw/                    ← 原始 MP3（不進 Git）
-│   ├── sliced/                 ← 切段 WAV（自動產生）
-│   ├── transcripts/            ← 轉錄清單（自動產生）
-│   └── reference/              ← 參考音訊 ref.wav
-├── models/                     ← 訓練好的模型（不進 Git）
-├── output/                     ← 生成音訊（不進 Git）
-├── scripts/
-│   ├── 01_preprocess.py        ← 音訊前處理
-│   ├── 02_transcribe.py        ← Whisper 自動轉錄
-│   ├── 03_validate_dataset.py  ← 校稿工具
-│   ├── 04_train_cli.bat        ← CLI 訓練（推薦，不需 WebUI）
-│   ├── 04_train_cli.py         ← CLI 訓練核心邏輯
-│   └── 04_launch_training.bat  ← 啟動 GPT-SoVITS WebUI（備用）
-├── infer/
-│   ├── infer_cli.py            ← CLI 推論
-│   ├── infer_ui.py             ← Web UI 推論
-│   └── start_ui.bat            ← 一鍵啟動 UI
-├── setup/
-│   └── install.bat             ← 一鍵安裝
-└── QUICK_START.md              ← 詳細操作指南
-```
+比較穩：
 
----
+- 300 段以上
+- 30-60 分鐘乾淨人聲
 
-## ⚙️ 設定說明
+更重要的是品質，不是長度。1 小時乾淨單人聲通常比 5 小時含音樂、多人插話、轉錄錯誤的資料好。
 
-主要設定集中在 `configs/voice_config.yaml`：
+## 目前專案結構
 
-```yaml
-inference:
-  sovits_model_path: "models/sovits_model.pth"
-  gpt_model_path: "models/gpt_model.ckpt"
-  reference_audio: "data/reference/ref.wav"
-  reference_text: "這裡填參考音訊說的話"
-  speed_factor: 1.0   # 語速（0.8 慢 / 1.0 正常 / 1.2 快）
-
-transcribe:
-  model_size: "large-v3"   # 轉錄品質（large-v3 最準）
-  device: "cuda"
+```text
+configs/voice_config.yaml       主要設定
+data/raw/                       原始錄音
+data/sliced/                    切好的訓練片段
+data/transcripts/               Whisper 與審校輸出
+data/reference/                 推論 reference
+models/                         fine-tune 後模型
+output/                         生成音檔
+scripts/00_doctor.py            環境檢查
+scripts/01_preprocess.py        切音與 normalize
+scripts/02_transcribe.py        Whisper 轉錄
+scripts/03_validate_dataset.py  審校文字
+scripts/04_train_cli.py         GPT-SoVITS CLI 訓練 wrapper
+scripts/05_make_reference.py    建立 reference clip
+infer/infer_cli.py              命令列推論
+infer/infer_ui.py               Gradio 推論 UI
 ```
 
----
+## 調參位置
 
-## 📊 效能參考
+主要改 [configs/voice_config.yaml](configs/voice_config.yaml)：
 
-| GPU | 生成 100 字 | 訓練時間（2h 資料） |
-|-----|------------|------------------|
-| RTX 3060 12GB | ~5 秒 | ~2 小時 |
-| RTX 3090 24GB | ~3 秒 | ~1 小時 |
-| RTX 4090 24GB | ~2 秒 | ~40 分鐘 |
+- `preprocess.min_segment_sec` / `max_segment_sec`：切段長度
+- `preprocess.silence_threshold_db`：靜音切割門檻
+- `transcribe.device`：`cuda` 或 `cpu`
+- `training.batch_size`：VRAM 不夠時從 4 改 2
+- `inference.temperature`：越高越有變化，但越可能不穩
+- `inference.speed_factor`：語速
 
----
+## 重要提醒
 
-## ❓ 常見問題
-
-**Q: CUDA 記憶體不足（OOM）？**  
-→ 在 `voice_config.yaml` 將 `batch_size` 從 4 改為 2
-
-**Q: 轉錄很慢？**  
-→ 將 `model_size` 改為 `medium`，`compute_type` 改為 `int8`
-
-**Q: 聲音不夠像我？**  
-→ 確保訓練資料 ≥ 1 小時；嘗試不同的參考音訊；增加訓練 Epoch
-
-**Q: 生成有雜音或斷音？**  
-→ 調整推論參數 `top_k: 3`、`temperature: 0.8`；或更換參考音訊
-
----
-
-## 📦 套件管理
-
-本專案使用 [uv](https://github.com/astral-sh/uv) 管理 Python 依賴：
-
-```bash
-# 安裝套件（禁止直接使用 pip install）
-uv add <package>
-
-# 同步所有依賴
-uv sync
-```
-
----
-
-## 📄 授權
-
-本專案依賴 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，請遵守其授權條款。
+請只 clone 你自己的聲音，或已取得明確授權的聲音。不要用這套流程冒充他人。

@@ -1,73 +1,93 @@
 #!/usr/bin/env python3
-"""
-Step 3: 資料集校稿工具
-- 顯示每段音訊的自動轉錄結果
-- 讓你播放音訊並校正錯誤文字
-- 標記並移除品質差的片段
-- 產出最終的訓練清單
-"""
+"""Review Whisper transcripts and create dataset_validated.txt."""
 
-import os
-import sys
-import yaml
+from __future__ import annotations
+
 import argparse
 import subprocess
+import sys
 from pathlib import Path
-from colorama import init, Fore, Style
+
+import yaml
+from colorama import Fore, Style, init
 
 init()
 
-# ── 路徑設定 ──────────────────────────────────────────
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "configs" / "voice_config.yaml"
-TRANSCRIPT_DIR = ROOT / "data" / "transcripts"
-DATASET_LIST = TRANSCRIPT_DIR / "dataset_list.txt"
-VALIDATED_LIST = TRANSCRIPT_DIR / "dataset_validated.txt"
-REJECTED_LIST = TRANSCRIPT_DIR / "dataset_rejected.txt"
-
-with open(CONFIG_PATH, encoding="utf-8") as f:
-    config = yaml.safe_load(f)
 
 
-def print_header():
-    print(f"\n{Fore.CYAN}{'='*55}")
-    print("  Step 3: 資料集校稿")
-    print(f"{'='*55}{Style.RESET_ALL}")
-    print("""
-操作說明：
-  [Enter]   → 保留此筆（轉錄正確）
-  [e]       → 編輯文字（有錯字時）
-  [d]       → 刪除此筆（音質差/轉錄嚴重錯誤）
-  [p]       → 播放音訊（需要 ffplay）
-  [s]       → 儲存並離開（下次繼續）
-  [q]       → 放棄並離開（不儲存）
-""")
+def load_config() -> dict:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
-def parse_dataset_list(filepath: Path) -> list[dict]:
-    """解析訓練清單"""
-    entries = []
-    with open(filepath, encoding="utf-8") as f:
-        for line_no, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split("|")
-            if len(parts) < 4:
-                continue
-            entries.append({
-                "line_no": line_no,
-                "audio_path": parts[0],
-                "speaker": parts[1],
-                "lang": parts[2],
-                "text": parts[3],
-                "status": "pending",  # pending / keep / edit / delete
-            })
+def parse_dataset_line(line: str) -> dict | None:
+    parts = line.rstrip("\n").split("|", 3)
+    if len(parts) != 4:
+        return None
+    return {
+        "audio_path": parts[0],
+        "speaker": parts[1],
+        "lang": parts[2],
+        "text": parts[3],
+        "status": "pending",
+    }
+
+
+def load_dataset(path: Path) -> list[dict]:
+    entries: list[dict] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            entry = parse_dataset_line(line)
+            if entry:
+                entries.append(entry)
     return entries
 
 
-def play_audio(audio_path: str):
-    """播放音訊（使用 ffplay）"""
+def progress_path(transcript_dir: Path) -> Path:
+    return transcript_dir / "dataset_progress.tsv"
+
+
+def load_progress(entries: list[dict], transcript_dir: Path) -> None:
+    path = progress_path(transcript_dir)
+    if not path.exists():
+        return
+    progress: dict[str, tuple[str, str]] = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t", 2)
+            if len(parts) == 3:
+                progress[parts[0]] = (parts[1], parts[2])
+    for entry in entries:
+        if entry["audio_path"] in progress:
+            entry["status"], entry["text"] = progress[entry["audio_path"]]
+
+
+def save_entries(entries: list[dict], transcript_dir: Path) -> tuple[int, int]:
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+    validated_path = transcript_dir / "dataset_validated.txt"
+    rejected_path = transcript_dir / "dataset_rejected.txt"
+
+    valid = [e for e in entries if e["status"] in {"keep", "edit"}]
+    rejected = [e for e in entries if e["status"] == "delete"]
+
+    with open(validated_path, "w", encoding="utf-8") as f:
+        for e in valid:
+            f.write(f"{e['audio_path']}|{e['speaker']}|{e['lang']}|{e['text']}\n")
+
+    with open(rejected_path, "w", encoding="utf-8") as f:
+        for e in rejected:
+            f.write(f"{e['audio_path']}|{e['speaker']}|{e['lang']}|{e['text']}\n")
+
+    with open(progress_path(transcript_dir), "w", encoding="utf-8") as f:
+        for e in entries:
+            f.write(f"{e['audio_path']}\t{e['status']}\t{e['text']}\n")
+
+    return len(valid), len(rejected)
+
+
+def play_audio(audio_path: str) -> None:
     try:
         subprocess.run(
             ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", audio_path],
@@ -75,214 +95,89 @@ def play_audio(audio_path: str):
             check=False,
         )
     except FileNotFoundError:
-        print(f"  {Fore.YELLOW}[提示] 找不到 ffplay，無法播放音訊{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}找不到 ffplay，請確認 ffmpeg 已安裝。{Style.RESET_ALL}")
     except subprocess.TimeoutExpired:
-        print(f"  {Fore.YELLOW}[提示] 播放超時{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}播放逾時，已停止。{Style.RESET_ALL}")
 
 
-def get_stats(entries: list[dict]) -> dict:
-    """統計各狀態數量"""
-    stats = {"pending": 0, "keep": 0, "edit": 0, "delete": 0}
-    for e in entries:
-        stats[e["status"]] += 1
-    return stats
+def stats(entries: list[dict]) -> str:
+    keep = sum(1 for e in entries if e["status"] in {"keep", "edit"})
+    delete = sum(1 for e in entries if e["status"] == "delete")
+    pending = sum(1 for e in entries if e["status"] == "pending")
+    return f"保留 {keep} / 刪除 {delete} / 未審 {pending}"
 
 
-def save_progress(entries: list[dict]):
-    """儲存已處理的結果"""
-    validated = []
-    rejected = []
-
-    for e in entries:
-        if e["status"] == "delete":
-            rejected.append(e)
-        elif e["status"] in ("keep", "edit"):
-            validated.append(e)
-        # pending 的不管（等下次繼續）
-
-    # 寫入已驗證清單（keep + edit）
-    with open(VALIDATED_LIST, "w", encoding="utf-8") as f:
-        for e in validated:
-            f.write(f"{e['audio_path']}|{e['speaker']}|{e['lang']}|{e['text']}\n")
-
-    # 寫入已驗證 + pending（保存完整進度）
-    progress_path = TRANSCRIPT_DIR / "dataset_progress.txt"
-    with open(progress_path, "w", encoding="utf-8") as f:
-        for e in entries:
-            status_marker = f"[{e['status'].upper()}]"
-            f.write(f"{status_marker}|{e['audio_path']}|{e['speaker']}|{e['lang']}|{e['text']}\n")
-
-    return len(validated), len(rejected)
-
-
-def load_progress(entries: list[dict]) -> list[dict]:
-    """讀取上次的進度"""
-    progress_path = TRANSCRIPT_DIR / "dataset_progress.txt"
-    if not progress_path.exists():
-        return entries
-
-    progress = {}
-    with open(progress_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split("|")
-            if len(parts) < 5:
-                continue
-            status_marker = parts[0]
-            audio_path = parts[1]
-            text = parts[4]
-            status = status_marker.strip("[]").lower()
-            if status in ("keep", "edit", "delete", "pending"):
-                progress[audio_path] = {"status": status, "text": text}
-
-    # 套用進度
-    for e in entries:
-        if e["audio_path"] in progress:
-            e["status"] = progress[e["audio_path"]]["status"]
-            e["text"] = progress[e["audio_path"]]["text"]
-
-    return entries
-
-
-def print_stats(entries: list[dict]):
-    stats = get_stats(entries)
-    total = len(entries)
-    done = stats["keep"] + stats["edit"] + stats["delete"]
-    pct = done / total * 100 if total > 0 else 0
-
-    print(f"\n  進度: {done}/{total} ({pct:.1f}%)")
-    print(f"  保留: {Fore.GREEN}{stats['keep'] + stats['edit']}{Style.RESET_ALL}  "
-          f"刪除: {Fore.RED}{stats['delete']}{Style.RESET_ALL}  "
-          f"待處理: {Fore.YELLOW}{stats['pending']}{Style.RESET_ALL}\n")
-
-
-def validate_interactive(entries: list[dict]):
-    """互動式校稿介面"""
+def interactive_review(entries: list[dict], transcript_dir: Path) -> None:
     pending = [e for e in entries if e["status"] == "pending"]
     total = len(entries)
+    print("操作：Enter=保留, e=改字, d=刪除, p=播放, s=存檔離開, q=不存離開")
 
-    if not pending:
-        print(f"{Fore.GREEN}所有資料已完成校稿！{Style.RESET_ALL}")
-        print_stats(entries)
-        return
-
-    print(f"待校稿: {Fore.YELLOW}{len(pending)}{Style.RESET_ALL} 筆\n")
-
-    for i, entry in enumerate(pending):
-        # 顯示進度
-        done = len(entries) - len([e for e in entries if e["status"] == "pending"])
-        print(f"{'─'*55}")
-        print(f"  [{done+1}/{total}] {Fore.CYAN}{Path(entry['audio_path']).name}{Style.RESET_ALL}")
-        print(f"  轉錄: {Fore.YELLOW}{entry['text']}{Style.RESET_ALL}")
-        print(f"{'─'*55}")
+    for entry in pending:
+        done = total - sum(1 for e in entries if e["status"] == "pending")
+        print("\n" + "-" * 72)
+        print(f"[{done + 1}/{total}] {Path(entry['audio_path']).name}")
+        print(f"文字：{Fore.YELLOW}{entry['text']}{Style.RESET_ALL}")
+        print("-" * 72)
 
         while True:
-            choice = input("  操作 [Enter/e/d/p/s/q]: ").strip().lower()
-
+            choice = input("選擇 [Enter/e/d/p/s/q]: ").strip().lower()
             if choice == "":
                 entry["status"] = "keep"
                 break
-            elif choice == "e":
-                new_text = input(f"  輸入正確文字: ").strip()
+            if choice == "e":
+                new_text = input("新的文字: ").strip()
                 if new_text:
                     entry["text"] = new_text
                     entry["status"] = "edit"
-                    print(f"  {Fore.GREEN}✓ 已更新{Style.RESET_ALL}")
                 break
-            elif choice == "d":
+            if choice == "d":
                 entry["status"] = "delete"
-                print(f"  {Fore.RED}✗ 已標記刪除{Style.RESET_ALL}")
                 break
-            elif choice == "p":
-                print(f"  播放中...")
+            if choice == "p":
                 play_audio(entry["audio_path"])
-            elif choice == "s":
-                print(f"\n{Fore.YELLOW}儲存進度並離開...{Style.RESET_ALL}")
+                continue
+            if choice == "s":
+                save_entries(entries, transcript_dir)
+                print(f"已存檔：{stats(entries)}")
                 return
-            elif choice == "q":
-                print(f"\n{Fore.RED}放棄修改，離開{Style.RESET_ALL}")
-                sys.exit(0)
-            else:
-                print(f"  請輸入有效的操作指令")
+            if choice == "q":
+                raise SystemExit("未存檔離開。")
+            print("無效選項。")
 
 
-def print_final_summary(validated_count: int, rejected_count: int):
-    print(f"\n{Fore.CYAN}{'='*55}")
-    print(f"  校稿完成！")
-    print(f"{'='*55}{Style.RESET_ALL}")
-    print(f"  有效訓練資料: {Fore.GREEN}{validated_count} 筆{Style.RESET_ALL}")
-    print(f"  已移除:       {Fore.RED}{rejected_count} 筆{Style.RESET_ALL}")
-    print(f"  輸出位置: {VALIDATED_LIST}")
-
-    if validated_count < 100:
-        print(f"\n{Fore.YELLOW}[警告] 有效資料少於 100 筆，建議補充更多錄音{Style.RESET_ALL}")
-    elif validated_count >= 300:
-        print(f"\n{Fore.GREEN}[良好] 資料量充足，可開始訓練！{Style.RESET_ALL}")
-
-    print(f"\n{Fore.CYAN}下一步: 執行訓練腳本{Style.RESET_ALL}")
-    print(f"  方式 A: 打開 GPT-SoVITS WebUI 進行訓練（推薦）")
-    print(f"  方式 B: python scripts/04_launch_training.bat\n")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Validate transcript dataset.")
+    parser.add_argument("--skip", action="store_true", help="Accept all pending lines without interactive review.")
+    return parser.parse_args()
 
 
-def skip_validation(entries: list[dict]):
-    """跳過校稿，全部標記為 keep"""
-    for e in entries:
-        if e["status"] == "pending":
-            e["status"] = "keep"
+def main() -> None:
+    args = parse_args()
+    config = load_config()
+    transcript_dir = ROOT / config["paths"]["transcript_dir"]
+    dataset_path = transcript_dir / "dataset_list.txt"
 
+    print(f"\n{Fore.CYAN}Step 3: validate dataset{Style.RESET_ALL}")
+    if not dataset_path.exists():
+        raise SystemExit("找不到 data/transcripts/dataset_list.txt，請先執行 Step 2。")
 
-def main():
-    parser = argparse.ArgumentParser(description="Step 3: 資料集校稿工具")
-    parser.add_argument(
-        "--skip",
-        action="store_true",
-        help="跳過人工校稿，全部保留並直接產出 dataset_validated.txt",
-    )
-    args = parser.parse_args()
+    entries = load_dataset(dataset_path)
+    load_progress(entries, transcript_dir)
+    if not entries:
+        raise SystemExit("dataset_list.txt 沒有可用資料。")
 
-    print_header()
+    print(f"資料筆數：{len(entries)}，{stats(entries)}")
 
-    if not DATASET_LIST.exists():
-        print(f"{Fore.RED}[錯誤] 找不到轉錄清單")
-        print(f"請先執行: python scripts/02_transcribe.py{Style.RESET_ALL}")
-        sys.exit(1)
-
-    # 解析並載入進度
-    entries = parse_dataset_list(DATASET_LIST)
-    entries = load_progress(entries)
-
-    total = len(entries)
-    print(f"共 {Fore.YELLOW}{total}{Style.RESET_ALL} 筆資料\n")
-
-    # ── 跳過模式 ──────────────────────────────────────────
     if args.skip:
-        print(f"{Fore.YELLOW}[--skip] 跳過人工校稿，全部資料標記為保留{Style.RESET_ALL}\n")
-        skip_validation(entries)
-        validated_count, rejected_count = save_progress(entries)
-        print_final_summary(validated_count, rejected_count)
-        return
-
-    # ── 一般互動流程 ───────────────────────────────────────
-    # 顯示統計
-    print_stats(entries)
-
-    # 詢問是否繼續
-    pending = [e for e in entries if e["status"] == "pending"]
-    if not pending:
-        print(f"{Fore.GREEN}所有資料已完成校稿！{Style.RESET_ALL}")
+        for entry in entries:
+            if entry["status"] == "pending":
+                entry["status"] = "keep"
     else:
-        choice = input(f"開始校稿 {len(pending)} 筆待處理資料？ [Y/n]: ").strip().lower()
-        if choice not in ("", "y", "yes"):
-            sys.exit(0)
+        interactive_review(entries, transcript_dir)
 
-        # 互動式校稿
-        validate_interactive(entries)
-
-    # 儲存
-    validated_count, rejected_count = save_progress(entries)
-    print_final_summary(validated_count, rejected_count)
+    valid, rejected = save_entries(entries, transcript_dir)
+    print(f"\n完成：保留 {valid}，刪除 {rejected}")
+    print("下一步：python scripts/05_make_reference.py")
 
 
 if __name__ == "__main__":
